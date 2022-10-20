@@ -12,11 +12,12 @@ from .pool import Pool
 from .probe import ProbeCallback, ProbeTarget
 from .probe import attach as probe_attach
 from .queue import Queue
-from .timescale import parse_time, scale_time
 from .util import partial_format
 
 if TYPE_CHECKING:
     from .simulation import SimEnvironment
+
+from pint import Quantity
 
 TraceCallback = Callable[..., None]
 
@@ -171,24 +172,27 @@ class VCDTracer(Tracer):
 
     name = 'vcd'
 
+    def __scale_time(self, from_time: Quantity, to_time: Quantity) -> Union[int, float]:
+        return (self.env.from_time.to(to_time.units) / to_time).magnitude
+
     def open(self) -> None:
         dump_filename: str = self.env.config.setdefault('sim.vcd.dump_file', 'sim.vcd')
         if 'sim.vcd.timescale' in self.env.config:
             vcd_ts_str: str = self.env.config.setdefault(
                 'sim.vcd.timescale', self.env.config['sim.timescale']
             )
-            mag, unit = parse_time(vcd_ts_str)
+            vcd_timescale = self.env.ureg(vcd_ts_str)
+            mag, unit = vcd_timescale.magnitude, vcd_timescale.units
         else:
-            mag, unit = self.env.timescale
+            mag, unit = self.env.timescale.magnitude, self.env.timescale.units
         mag_int = int(mag)
         if mag_int != mag:
-            raise ValueError(f'sim.timescale magnitude must be an integer, got {mag}')
-        vcd_timescale = mag_int, unit
-        self.scale_factor = scale_time(self.env.timescale, vcd_timescale)
+            raise ValueError(f'sim.vcd.timescale magnitude must be an integer, got {mag}')
+        self.scale_factor = self.__scale_time(self.env.timescale, vcd_timescale)
         check_values: bool = self.env.config.setdefault('sim.vcd.check_values', True)
         self.dump_file = open(dump_filename, 'w')
         self.vcd = VCDWriter(
-            self.dump_file, timescale=vcd_timescale, check_values=check_values
+            self.dump_file, timescale=(mag_int, f'{unit:~}'), check_values=check_values
         )
         self.save_filename: str = self.env.config.setdefault(
             'sim.gtkw.file', 'sim.gtkw'
@@ -202,12 +206,12 @@ class VCDTracer(Tracer):
         start_time: str = self.env.config.setdefault('sim.vcd.start_time', '')
         stop_time: str = self.env.config.setdefault('sim.vcd.stop_time', '')
         t_start = (
-            scale_time(parse_time(start_time), self.env.timescale)
+            self.__scale_time(self.env.ureg(start_time), self.env.timescale)
             if start_time
             else None
         )
         t_stop = (
-            scale_time(parse_time(stop_time), self.env.timescale) if stop_time else None
+            self.__scale_time(self.env.ureg(stop_time), self.env.timescale) if stop_time else None
         )
         self.env.process(self._start_stop(t_start, t_stop))
 

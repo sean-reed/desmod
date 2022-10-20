@@ -24,6 +24,7 @@ import timeit
 
 import simpy
 import yaml
+from pint import UnitRegistry, Quantity, Unit
 
 from desmod.config import ConfigDict, ConfigFactor, factorial_config
 from desmod.progress import (
@@ -32,13 +33,15 @@ from desmod.progress import (
     get_multi_progress_manager,
     standalone_progress_manager,
 )
-from desmod.timescale import parse_time, scale_time
+
 from desmod.tracer import TraceManager
 
 if TYPE_CHECKING:
     from desmod.component import Component  # noqa: F401
 
 ResultDict = Dict[str, Any]
+
+TimeValue = Union[simpy.core.SimTime, Quantity]
 
 
 class SimEnvironment(simpy.Environment):
@@ -48,8 +51,9 @@ class SimEnvironment(simpy.Environment):
     that adds some useful features:
 
      - Access to the configuration dictionary (`config`).
-     - Access to a seeded pseudo-random number generator (`rand`).
+     - Access to the  registry of simulation units (`ureg`).
      - Access to the simulation timescale (`timescale`).
+     - Access to a seeded pseudo-random number generator (`rand`).
      - Access to the simulation duration (`duration`).
 
     Some models may need to share additional state with all its
@@ -71,20 +75,27 @@ class SimEnvironment(simpy.Environment):
         seed = config.setdefault('sim.seed', None)
         self.rand.seed(seed, version=1)
 
-        timescale_str = self.config.setdefault('sim.timescale', '1 s')
+        #: :attr:'ureg' is the Pint library unit registry, where all units for the simulation are defined.
+        self.ureg: UnitRegistry = UnitRegistry()
 
-        #: Simulation timescale ``(magnitude, units)`` tuple. The current
-        #: simulation time is ``now * timescale``.
-        self.timescale = parse_time(timescale_str)
+        timescale_str = self.config.setdefault('sim.timescale', 'second')
 
-        duration = config.setdefault('sim.duration', '0 s')
+        #: :attr:`timescale` is the quantity of time that one simulation time unit
+        # (from :meth:'now()') represents.
+        self.timescale: Quantity = self.ureg(timescale_str)
+
+        duration = config.setdefault('sim.duration', '0')
 
         #: The intended simulation duration, in units of :attr:`timescale`.
-        self.duration = scale_time(parse_time(duration), self.timescale)
+        self.duration = self.ureg(duration)
+        if isinstance(self.duration, Quantity):
+            self.duration = self.duration.to(self.timescale.units)
+        else:
+            self.duration = self.duration * self.timescale
 
         #: The simulation runs "until" this event. By default, this is the
         #: configured "sim.duration", but may be overridden by subclasses.
-        self.until = self.duration
+        self.until = self.duration.to(self.timescale.units).magnitude
 
         #: From 'meta.sim.index', the simulation's index when running multiple
         #: related simulations or `None` for a standalone simulation.
@@ -98,13 +109,25 @@ class SimEnvironment(simpy.Environment):
 
         :param float t: Time in simulation units. Default is :attr:`now`.
         :param str unit: Unit of time to scale to. Default is 's' (seconds).
-        :returns: Simulation time scaled to to `unit`.
+        :returns: Simulation time scaled to `unit`.
 
         """
-        target_scale = parse_time(unit)
-        ts_mag, ts_unit = self.timescale
-        sim_time = ((self.now if t is None else t) * ts_mag, ts_unit)
-        return scale_time(sim_time, target_scale)
+        target_scale = self.ureg(unit)
+        t = self.now if t is None else t
+        scaled_time = (t / target_scale.to(self.timescale.units)).magnitude
+
+        return scaled_time
+
+    def time_units(self, t: TimeValue) -> float:
+        """Convert a time value to simulation time units.
+
+        :param TimeValue t: The time value to convert.
+        :returns: The time value converted to simulation time units.
+
+        """
+        if isinstance(t, Quantity):
+            t = (t.to(self.timescale.units) / self.timescale).magnitude
+        return t
 
     def get_progress(self) -> ProgressTuple:
         if isinstance(self.until, SimStopEvent):
@@ -112,6 +135,34 @@ class SimEnvironment(simpy.Environment):
         else:
             t_stop = self.until
         return self.sim_index, self.now, t_stop, self.timescale
+
+    def timeout(self, delay: TimeValue = 0, value: Optional[Any] = None
+                ) -> simpy.Timeout:
+        """A timeout event.
+
+        :param Quantity delay: The delay before the timeout occurs.
+        :param value: The value to return when the timeout occurs.
+        :returns: A :class:`Timeout` event.
+
+        """
+        time_units = self.time_units(delay)
+        return super().timeout(time_units, value)
+
+    def schedule(
+        self,
+        event: simpy.Event,
+        priority: simpy.events.EventPriority = simpy.events.NORMAL,
+        delay: TimeValue = 0,
+    ) -> None:
+        """Schedule an event.
+
+        :param event: The event to schedule.
+        :param priority: The priority of the event. Default is NORMAL.
+        :param TimeValue delay: The delay before the event occurs.
+
+        """
+        time_units = self.time_units(delay)
+        super().schedule(event, priority, self.now + time_units)
 
 
 class SimStopEvent(simpy.Event):
@@ -127,9 +178,9 @@ class SimStopEvent(simpy.Event):
 
     def __init__(self, env: SimEnvironment) -> None:
         super().__init__(env)
-        self.t_stop: Optional[Union[int, float]] = None
+        self.t_stop: Optional[TimeValue] = None
 
-    def schedule(self, delay: Union[int, float] = 0) -> None:
+    def schedule(self, delay: TimeValue = 0) -> None:
         assert not self.triggered
         assert delay >= 0
         self._ok = True
@@ -220,7 +271,7 @@ def simulate(
                     env.tracemgr.flush()
                     result['config'] = config
                     result['sim.now'] = env.now
-                    result['sim.time'] = env.time()
+                    result['sim.time'] = str(env.time())
                     result['sim.runtime'] = timeit.default_timer() - t0
                     _dump_dict(config_file, config)
                     _dump_dict(result_file, result)

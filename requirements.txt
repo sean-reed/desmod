@@ -11,3 +11,4 @@ Sphinx
 sphinx-rtd-theme
 tox
 types-PyYAML
+pint

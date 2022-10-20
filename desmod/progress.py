@@ -4,11 +4,11 @@ from queue import Queue
 from typing import IO, TYPE_CHECKING, Dict, Generator, List, Optional, Set, Tuple, Union
 import sys
 import timeit
+from pint import UnitRegistry, Unit, Quantity
 
 import simpy
 
 from desmod.config import ConfigDict
-from desmod.timescale import TimeValue, parse_time, scale_time
 
 try:
     import progressbar
@@ -26,7 +26,7 @@ ProgressTuple = Tuple[
     Optional[int],  # simulation index
     Union[int, float],  # now
     Optional[Union[int, float]],  # t_stop
-    TimeValue,  # timescale
+    Quantity,  # timescale
 ]
 
 
@@ -34,7 +34,7 @@ ProgressTuple = Tuple[
 def standalone_progress_manager(env: 'SimEnvironment') -> Generator[None, None, None]:
     enabled: bool = env.config.setdefault('sim.progress.enable', False)
     max_width: int = env.config.setdefault('sim.progress.max_width')
-    period_s = _get_interval_period_s(env.config)
+    period_s = _get_interval_period_s(env.ureg, env.config)
 
     if enabled:
         if sys.stderr.isatty() and progressbar:
@@ -61,15 +61,16 @@ def standalone_progress_manager(env: 'SimEnvironment') -> Generator[None, None, 
         yield None
 
 
-def _get_interval_period_s(config: ConfigDict) -> Union[int, float]:
+def _get_interval_period_s(ureg: UnitRegistry, config: ConfigDict) -> Union[int, float]:
     period_str: str = config.setdefault('sim.progress.update_period', '1 s')
-    return scale_time(parse_time(period_str), (1, 's'))
+    period = ureg(period_str)
+    return period.to(ureg.second).magnitude
 
 
 def _standalone_display_process(
     env: 'SimEnvironment', period_s: Union[int, float], fd: IO
 ) -> Generator[simpy.Timeout, None, None]:
-    interval = 1.0
+    interval = env.timescale * 1
     end = '\r' if fd.isatty() else '\n'
     while True:
         sim_index, now, t_stop, timescale = env.get_progress()
@@ -84,14 +85,14 @@ def _print_progress(
     sim_index: Optional[int],
     now: Union[int, float],
     t_stop: Optional[Union[int, float]],
-    timescale: TimeValue,
+    timescale: Quantity,
     end: str,
     fd: IO,
 ) -> None:
     parts = []
     if sim_index:
         parts.append(f'Sim {sim_index}')
-    magnitude, units = timescale
+    magnitude, units = timescale.magnitude, timescale.units
     if magnitude == 1:
         parts.append(f'{now:6.0f} {units}')
     else:
@@ -125,7 +126,7 @@ def _get_standalone_pbar(
 def _standalone_pbar_process(
     env: 'SimEnvironment', pbar: progressbar.ProgressBar, period_s: Union[int, float]
 ) -> Generator[simpy.Timeout, None, None]:
-    interval = 1.0
+    interval = env.timescale * 1.0
     while True:
         sim_index, now, t_stop, timescale = env.get_progress()
         if t_stop and pbar.max_value != t_stop:
@@ -141,14 +142,13 @@ def _standalone_pbar_process(
 
 
 def _get_progressbar_widgets(
-    sim_index: Optional[int], timescale: TimeValue, know_stop_time: bool
+    sim_index: Optional[int], timescale: Quantity, know_stop_time: bool
 ) -> List[progressbar.widgets.WidgetBase]:
     widgets = []
 
     if sim_index is not None:
         widgets.append(f'Sim {sim_index:3}|')
-
-    magnitude, units = timescale
+    magnitude, units = timescale.magnitude, timescale.units
     if magnitude == 1:
         sim_time_format = f'%(value)6.0f {units}|'
     else:
@@ -171,7 +171,7 @@ def get_multi_progress_manager(progress_queue: Optional['Queue[ProgressTuple]'])
     @contextmanager
     def progress_producer(env):
         if progress_queue:
-            period_s = _get_interval_period_s(env.config)
+            period_s = _get_interval_period_s(env.ureg, env.config)
             env.process(_progress_enqueue_process(env, period_s, progress_queue))
             try:
                 yield None
@@ -188,7 +188,7 @@ def _progress_enqueue_process(
     period_s: Union[int, float],
     progress_queue: 'Queue[ProgressTuple]',
 ) -> Generator[simpy.Timeout, None, None]:
-    interval = 1.0
+    interval = 1.0 * env.timescale
     while True:
         progress_queue.put(env.get_progress())
         t0 = timeit.default_timer()
