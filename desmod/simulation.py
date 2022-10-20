@@ -271,7 +271,7 @@ def simulate(
                     env.tracemgr.flush()
                     result['config'] = config
                     result['sim.now'] = env.now
-                    result['sim.time'] = str(env.time())
+                    result['sim.time'] = env.time()
                     result['sim.runtime'] = timeit.default_timer() - t0
                     _dump_dict(config_file, config)
                     _dump_dict(result_file, result)
