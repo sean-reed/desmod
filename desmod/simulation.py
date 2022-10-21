@@ -89,13 +89,11 @@ class SimEnvironment(simpy.Environment):
         #: The intended simulation duration, in units of :attr:`timescale`.
         self.duration = self.ureg(duration)
         if isinstance(self.duration, Quantity):
-            self.duration = self.duration.to(self.timescale.units)
-        else:
-            self.duration = self.duration * self.timescale
+            self.duration = (self.duration.to(self.timescale.units) / self.timescale).magnitude
 
         #: The simulation runs "until" this event. By default, this is the
         #: configured "sim.duration", but may be overridden by subclasses.
-        self.until = self.duration.to(self.timescale.units).magnitude
+        self.until = self.duration
 
         #: From 'meta.sim.index', the simulation's index when running multiple
         #: related simulations or `None` for a standalone simulation.
@@ -114,7 +112,7 @@ class SimEnvironment(simpy.Environment):
         """
         target_scale = self.ureg(unit)
         t = self.now if t is None else t
-        scaled_time = (t / target_scale.to(self.timescale.units)).magnitude
+        scaled_time = ((self.timescale * t) / target_scale.to(self.timescale.units)).magnitude
 
         return scaled_time
 
@@ -162,7 +160,7 @@ class SimEnvironment(simpy.Environment):
 
         """
         time_units = self.time_units(delay)
-        super().schedule(event, priority, self.now + time_units)
+        super().schedule(event, priority, time_units)
 
 
 class SimStopEvent(simpy.Event):
