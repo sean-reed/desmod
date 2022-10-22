@@ -172,8 +172,18 @@ class VCDTracer(Tracer):
 
     name = 'vcd'
 
-    def __scale_time(self, from_time: Quantity, to_time: Quantity) -> Union[int, float]:
-        return (self.env.from_time.to(to_time.units) / to_time).magnitude
+    @staticmethod
+    def __scale_time(from_time: Quantity, to_time: Quantity) -> Union[int, float]:
+        return (from_time.to(to_time.units) / to_time).magnitude
+
+    @staticmethod
+    def __convert_to_vcd_units(unit: str) -> str:
+        if unit == 'µs':
+            unit = 'us'
+        elif unit not in ['s', 'ms', 'us', 'ns', 'ps', 'fs']:
+            raise ValueError(f'Unit unsupported by VCD: {unit}')
+
+        return unit
 
     def open(self) -> None:
         dump_filename: str = self.env.config.setdefault('sim.vcd.dump_file', 'sim.vcd')
@@ -182,9 +192,11 @@ class VCDTracer(Tracer):
                 'sim.vcd.timescale', self.env.config['sim.timescale']
             )
             vcd_timescale = self.env.ureg(vcd_ts_str)
-            mag, unit = vcd_timescale.magnitude, vcd_timescale.units
+
         else:
-            mag, unit = self.env.timescale.magnitude, self.env.timescale.units
+            vcd_timescale = self.env.timescale
+
+        mag, unit = vcd_timescale.magnitude, self.__convert_to_vcd_units(f'{vcd_timescale.units:~}')
         mag_int = int(mag)
         if mag_int != mag:
             raise ValueError(f'sim.vcd.timescale magnitude must be an integer, got {mag}')
@@ -192,7 +204,7 @@ class VCDTracer(Tracer):
         check_values: bool = self.env.config.setdefault('sim.vcd.check_values', True)
         self.dump_file = open(dump_filename, 'w')
         self.vcd = VCDWriter(
-            self.dump_file, timescale=(mag_int, f'{unit:~}'), check_values=check_values
+            self.dump_file, timescale=(mag_int, unit), check_values=check_values
         )
         self.save_filename: str = self.env.config.setdefault(
             'sim.gtkw.file', 'sim.gtkw'
