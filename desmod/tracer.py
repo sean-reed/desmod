@@ -98,7 +98,7 @@ class LogTracer(Tracer):
         self.format_str: str = self.env.config.setdefault(
             'sim.log.format', self.default_format
         )
-        ts_n, ts_unit = self.env.timescale
+        ts_n, ts_unit = self.env.timescale.magnitude, f'{self.env.timescale.units:~}'
         if ts_n == 1:
             self.ts_unit = ts_unit
         else:

@@ -145,7 +145,7 @@ def test_log(config):
     log_path = os.path.join(config['sim.workspace'], config['sim.log.file'])
     assert os.path.exists(log_path)
     last_line = open(log_path).readlines()[-1]
-    assert last_line == 'INFO    9.000 us: top.container: 1\n'
+    assert last_line == 'INFO    9.000 µs: top.container: 1\n'
 
 
 def test_log_stderr(config, capsys):
@@ -154,7 +154,7 @@ def test_log_stderr(config, capsys):
     simulate(config, TopTest)
     out, err = capsys.readouterr()
     assert out == ''
-    assert err.endswith('INFO    9.000 us: top.container: 1\n')
+    assert err.endswith('INFO    9.000 µs: top.container: 1\n')
 
 
 def test_log_persist(config):
@@ -166,7 +166,6 @@ def test_log_persist(config):
 
     config['sim.log.file'] = ''
     simulate(config, TopTest)
-
 
 def test_vcd(config):
     config['sim.vcd.enable'] = True
