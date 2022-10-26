@@ -4,6 +4,8 @@ import os
 import pytest
 import yaml
 
+from datetime import datetime
+
 from desmod.component import Component
 from desmod.simulation import (
     SimEnvironment,
@@ -68,13 +70,21 @@ class TopTest(Component):
         self.add_process(self.test_proc)
 
     def test_proc(self):
-        yield self.env.timeout(0.5)
+        use_pint = self.env.config.setdefault('test.use_pint', True)
+        timeout_delay = 0.5
+        until_delay = self.env.config.get('test.until_delay')
+        if use_pint:  # Use Pint quantities for times.
+            timeout_delay *= self.env.timescale
+            if until_delay is not None:
+                until_delay *= self.env.timescale
+
+        yield self.env.timeout(timeout_delay)
         if self.env.config.get('test.fail_simulate'):
             assert False, 'fail_simulate'
         until_delay = self.env.config.get('test.until_delay')
         if until_delay is not None:
             self.env.until.schedule(until_delay)
-        yield self.env.timeout(0.5)
+        yield self.env.timeout(timeout_delay)
 
     def post_sim_hook(self):
         if self.env.config.get('test.fail_post_simulate'):
@@ -83,7 +93,7 @@ class TopTest(Component):
     def get_result_hook(self, result):
         if self.env.config.get('test.fail_get_result'):
             raise Exception('fail_get_result')
-        result['time_100ps'] = self.env.time(unit='100 ps')
+        result['time_100ps'] = self.env.time(timescale='100 ps')
 
 
 def test_pre_init_failure(config):
@@ -161,7 +171,9 @@ def test_no_result_file(config):
     assert not os.listdir(config['sim.workspace'])
 
 
-def test_simulate_with_progress(config, capsys):
+@pytest.mark.parametrize('use_pint', [True, False])
+def test_simulate_with_progress(config, capsys, use_pint):
+    config['test.use_pint'] = use_pint
     config['sim.progress.enable'] = True
     config['sim.duration'] = '10 us'
     simulate(config, TopTest)
@@ -169,8 +181,10 @@ def test_simulate_with_progress(config, capsys):
     assert err.endswith('(100%)\n')
 
 
+@pytest.mark.parametrize('use_pint', [True, False])
 @pytest.mark.parametrize('max_width', [0, 1])
-def test_simulate_with_progress_tty(config, capsys, max_width):
+def test_simulate_with_progress_tty(config, capsys, max_width, use_pint):
+    config['test.use_pint'] = use_pint
     config['sim.progress.enable'] = True
     config['sim.progress.max_width'] = max_width
     config['sim.duration'] = '10 us'
@@ -178,7 +192,9 @@ def test_simulate_with_progress_tty(config, capsys, max_width):
         simulate(config, TopTest)
 
 
-def test_simulate_progress_non_one_timescale(config):
+@pytest.mark.parametrize('use_pint', [True, False])
+def test_simulate_progress_non_one_timescale(config, use_pint):
+    config['test.use_pint'] = use_pint
     config['sim.progress.enable'] = True
     config['sim.timescale'] = '100 ns'
     config['sim.duration'] = '10 us'
@@ -459,13 +475,16 @@ def test_sim_time_non_default_t(config):
     assert env.time(t=500) == 0.5
 
 
+
 @pytest.mark.parametrize('progress_enable', [True, False])
-def test_sim_until(config, progress_enable):
+@pytest.mark.parametrize('use_pint', [True, False])
+def test_sim_until(config, progress_enable, use_pint):
     class TestEnvironment(SimEnvironment):
         def __init__(self, config):
             super().__init__(config)
             self.until = SimStopEvent(self)
 
+    config['test.use_pint'] = use_pint
     config['sim.progress.enable'] = progress_enable
     config['test.until_delay'] = 0
     result = simulate(config, TopTest, TestEnvironment)
@@ -474,6 +493,27 @@ def test_sim_until(config, progress_enable):
     config['test.until_delay'] = 0.25
     result = simulate(config, TopTest, TestEnvironment)
     assert result['sim.now'] == 0.75
+
+
+@pytest.mark.parametrize('progress_enable', [True, False])
+def test_sim_dates(config, progress_enable):
+    class TestEnvironment(SimEnvironment):
+        def __init__(self, config):
+            super().__init__(config)
+            self.until = SimStopEvent(self)
+
+    config['sim.start_date'] = '2019-01-01 06:30:12'
+    config['sim.timescale'] = 'hour'
+    config['sim.duration'] = '2 years'
+    config['test.until_delay'] = 0
+    result = simulate(config, TopTest, TestEnvironment)
+    assert result['sim.now'] == 0.50
+    assert result['sim.date'] == '2019-01-01 07:00:12'
+
+    config['test.until_delay'] = 11260.01
+    result = simulate(config, TopTest, TestEnvironment)
+    assert result['sim.now'] == 11260.51
+    assert result['sim.date'] == "2020-04-14 11:00:48"
 
 
 def test_sim_json_result(config):

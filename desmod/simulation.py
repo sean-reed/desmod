@@ -25,6 +25,7 @@ import timeit
 import simpy
 import yaml
 from pint import UnitRegistry, Quantity, Unit
+from datetime import datetime
 
 from desmod.config import ConfigDict, ConfigFactor, factorial_config
 from desmod.progress import (
@@ -91,6 +92,14 @@ class SimEnvironment(simpy.Environment):
         if isinstance(self.duration, Quantity):
             self.duration = (self.duration.to(self.timescale.units) / self.timescale).magnitude
 
+        #: The start date and time of the simulation, default is the current date and time.
+        #: Format is YYYY-MM-DD HH:MM:SS, for example 2022-01-01 12:00:00.
+        self.start_date_str = config.setdefault('sim.start_date', None)
+        if self.start_date_str is not None:
+            self.start_date = datetime.strptime(self.start_date_str, '%Y-%m-%d %H:%M:%S')
+        else:
+            self.start_date = datetime.now()
+
         #: The simulation runs "until" this event. By default, this is the
         #: configured "sim.duration", but may be overridden by subclasses.
         self.until = self.duration
@@ -102,19 +111,40 @@ class SimEnvironment(simpy.Environment):
         #: :class:`TraceManager` instance.
         self.tracemgr = TraceManager(self)
 
-    def time(self, t: Optional[float] = None, unit: str = 's') -> Union[int, float]:
+    def time(self, t: Optional[float] = None, timescale: str = 's') -> Union[int, float]:
         """The current simulation time scaled to specified unit.
 
         :param float t: Time in simulation units. Default is :attr:`now`.
-        :param str unit: Unit of time to scale to. Default is 's' (seconds).
+        :param str timescale: The timescale to scale to. Default is '1 s' (seconds).
         :returns: Simulation time scaled to `unit`.
 
         """
-        target_scale = self.ureg(unit)
+        target_scale = self.ureg(timescale)
         t = self.now if t is None else t
         scaled_time = ((self.timescale * t) / target_scale.to(self.timescale.units)).magnitude
 
         return scaled_time
+
+    def time_delta(self, unit: Optional[Union[str, Unit]] = None) -> Quantity:
+        """The current simulation time as a Pint Quantity.
+
+        :param unit: The unit to convert the time to (e.g. 's', 'min', or pint.Unit('s')).
+        Default is the same unit as :attr:`timescale`.
+        :returns: The current simulation time as a Pint Quantity.
+
+        """
+        td = self.now * self.timescale
+        if unit is not None:
+            td = td.to(unit)
+        return td
+
+    def date_time(self) -> datetime:
+        """The current simulation date and time.
+
+        :returns: The current simulation date and time.
+
+        """
+        return self.start_date + self.time_delta()
 
     def time_units(self, t: TimeValue) -> float:
         """Convert a time value to simulation time units.
@@ -270,6 +300,7 @@ def simulate(
                     result['config'] = config
                     result['sim.now'] = env.now
                     result['sim.time'] = env.time()
+                    result['sim.date'] = str(env.date_time())
                     result['sim.runtime'] = timeit.default_timer() - t0
                     _dump_dict(config_file, config)
                     _dump_dict(result_file, result)
