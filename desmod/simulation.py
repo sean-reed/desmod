@@ -125,12 +125,12 @@ class SimEnvironment(simpy.Environment):
 
         return scaled_time
 
-    def time_delta(self, unit: Optional[Union[str, Unit]] = None) -> Quantity:
-        """The current simulation time as a Pint Quantity.
+    def timedelta(self, unit: Optional[Union[str, Unit]] = None) -> Quantity:
+        """The time elapsed since :attr:'start_date'.
 
         :param unit: The unit to convert the time to (e.g. 's', 'min', or pint.Unit('s')).
         Default is the same unit as :attr:`timescale`.
-        :returns: The current simulation time as a Pint Quantity.
+        :returns: The time elapsed since :attr:'start_date' as a :class:'Quantity'.
 
         """
         td = self.now * self.timescale
@@ -138,13 +138,13 @@ class SimEnvironment(simpy.Environment):
             td = td.to(unit)
         return td
 
-    def date_time(self) -> datetime:
+    def datetime(self) -> datetime:
         """The current simulation date and time.
 
         :returns: The current simulation date and time.
 
         """
-        return self.start_date + self.time_delta()
+        return self.start_date + self.timedelta()
 
     def time_units(self, t: TimeValue) -> float:
         """Convert a time value to simulation time units.
@@ -168,13 +168,26 @@ class SimEnvironment(simpy.Environment):
                 ) -> simpy.Timeout:
         """A timeout event.
 
-        :param Quantity delay: The delay before the timeout occurs.
+        :param delay: The delay before the timeout occurs.
         :param value: The value to return when the timeout occurs.
         :returns: A :class:`Timeout` event.
 
         """
         time_units = self.time_units(delay)
-        return super().timeout(time_units, value)
+        timeout = super().timeout(time_units, value)
+
+        return timeout
+
+    def wait_until(self, time: Union[float, datetime], value: Optional[Any] = None
+                   ) -> 'WaitUntil':
+        """A wait until event.
+
+        :param time: The time at which the event occurs.
+        :param value: The value to return when the event occurs.
+        :returns: A :class:`WaitUntil` event.
+
+        """
+        return WaitUntil(self.env, time, value)
 
     def schedule(
         self,
@@ -191,6 +204,81 @@ class SimEnvironment(simpy.Environment):
         """
         time_units = self.time_units(delay)
         super().schedule(event, priority, time_units)
+
+
+class WaitUntil(simpy.Timeout):
+    """A :class:`~simpy.events.Event` that gets processed at a specified time.
+
+    This event is automatically triggered when it is created.
+    """
+    def __init__(
+        self,
+        env: simpy.Environment,
+        time: Union[simpy.core.SimTime, datetime],
+        value: Optional[Any] = None,
+    ):
+        self.created_at: datetime = env.datetime()
+
+        if isinstance(time, datetime):
+            self.process_at: datetime = time
+            delay = time - env.datetime()
+        else:
+            self.process_at: datetime = (env.timescale * (time - env.now))
+            delay = time - env.now
+
+        if delay < 0:
+            raise ValueError(f'Time is in the past {time}.')
+        # NOTE: The following initialization code is inlined from
+        # Event.__init__() for performance reasons.
+        self.env = env
+        self.callbacks: simpy.events.EventCallbacks = []
+        self._value = value
+        self._delay = delay
+        self._ok = True
+        env.schedule(self, simpy.events.EventPriority.NORMAL, delay)
+
+    def remaining_delay(self, unit: Optional[Union[str, Unit]] = None) -> Quantity:
+        """The remaining delay before the event is processed.
+        :param unit: The unit to convert the time to (e.g. 's', 'min', or pint.Unit('s')).
+        Default is the same unit as :attr:`timescale`.
+
+        :returns: The remaining delay before the event is processed as a :class:'Quantity'.
+        """
+        if not self.processed:
+            delay_s = (self.process_at - self.env.datetime()).total_seconds()
+        else:
+            delay_s = 0
+
+        delay = self.env.ureg.Quantity(delay_s, 's')
+
+        if unit is not None:
+            delay = delay.to(unit)
+        else:
+            delay = delay.to(self.env.timescale.units)
+
+        return delay
+
+    def elapsed(self, unit: Optional[Union[str, Unit]] = None) -> Quantity:
+        """The simulation time that has elapsed since the event was created.
+        :param unit: The unit to convert the time to (e.g. 's', 'min', or pint.Unit('s')).
+        Default is the same unit as :attr:`timescale`.
+
+        :returns: The simulation time that has elapsed since the event was created as a :class:'Quantity'.
+        """
+        elapsed_s = (self.env.datetime() - self.created_at).total_seconds()
+        elapsed = self.env.ureg.Quantity(elapsed_s, 's')
+
+        if unit is not None:
+            elapsed = elapsed.to(unit)
+        else:
+            elapsed = elapsed.to(self.env.timescale.units)
+
+        return elapsed
+
+    def _desc(self) -> str:
+        """Return a string *WaitUntil(time[, value=value])*."""
+        value_str = '' if self._value is None else f', value={self.value}'
+        return f'{self.__class__.__name__}({self.time}{value_str})'
 
 
 class SimStopEvent(simpy.Event):
@@ -300,7 +388,7 @@ def simulate(
                     result['config'] = config
                     result['sim.now'] = env.now
                     result['sim.time'] = env.time()
-                    result['sim.date'] = str(env.date_time())
+                    result['sim.date'] = str(env.datetime())
                     result['sim.runtime'] = timeit.default_timer() - t0
                     _dump_dict(config_file, config)
                     _dump_dict(result_file, result)
