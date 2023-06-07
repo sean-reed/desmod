@@ -23,6 +23,7 @@ import shutil
 import timeit
 
 import simpy
+import numpy as np
 import yaml
 from pint import UnitRegistry, Quantity, Unit
 from datetime import datetime
@@ -69,12 +70,6 @@ class SimEnvironment(simpy.Environment):
         super().__init__()
         #: The configuration dictionary.
         self.config = config
-
-        #: The pseudo-random number generator; an instance of
-        #: :class:`random.Random`.
-        self.rand = random.Random()
-        seed = config.setdefault('sim.seed', None)
-        self.rand.seed(seed, version=1)
 
         #: :attr:'ureg' is the Pint library unit registry, where all units for the simulation are defined.
         self.ureg: UnitRegistry = UnitRegistry()
@@ -335,10 +330,50 @@ class _Workspace:
         return None
 
 
+def get_rngs(
+    config: ConfigDict,
+    seed: Optional[int] = None,
+    num_rngs: int = 1,
+    rng_type: Optional[str] = None,
+) -> List[np.random.Generator]:
+    """Get a list of random number generators.
+
+    :param config: The configuration dictionary.
+    :param seed: The seed for the random number generator. If None, the seed
+        will be read from the configuration dictionary or use a default of 0.
+    :param num_rngs: The number of random number generators to return.
+    :param rng_type: The type of random number generator to return (chosen from MT19937, PCG64, PCG64DXSM,
+    Philox). If None, the type will be read from the configuration dictionary or use the default of MT19937
+    (Mersenne Twister).
+    :returns: A list of random number generators.
+
+    """
+    if seed is None:
+        seed = config.setdefault('sim.seed', 0)
+    if rng_type is None:
+        rng_type = config.setdefault('sim.rng', 'MT19937')  # Mersenne Twister.
+
+    match rng_type:
+        case 'MT19937':
+            rng_type = np.random.MT19937
+        case 'PCG64':
+            rng_type = np.random.PCG64
+        case 'PCG64DXSM':
+            rng_type = np.random.PCG64DXSM
+        case 'Philox':
+            rng_type = np.random.Philox
+
+    bit_generator = rng_type(seed)
+    rngs = [np.random.Generator(bit_generator.jumped(i)) for i in range(num_rngs)]
+
+    return rngs
+
+
 def simulate(
     config: ConfigDict,
     top_type: Type['Component'],
     env_type: Type[SimEnvironment] = SimEnvironment,
+    rngs: Optional[List[np.random.Generator]] = None,
     reraise: bool = True,
     progress_manager=standalone_progress_manager,
 ) -> ResultDict:
@@ -369,8 +404,9 @@ def simulate(
                     top_type.pre_init(env)
                     env.tracemgr.flush()
                     with progress_manager(env):
-                        top = top_type(parent=None, env=env)
-                        top.elaborate()
+                        top: Component = top_type(parent=None, env=env)
+                        rngs = get_rngs(config, num_rngs=top.get_subtree_rngs()) if rngs is None else rngs
+                        top.elaborate(rngs)
                         env.tracemgr.flush()
                         env.run(until=env.until)
                         env.tracemgr.flush()

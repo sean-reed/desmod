@@ -67,6 +67,8 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple
 
 import simpy
 
+import numpy as np
+
 from .simulation import ResultDict, SimEnvironment
 
 ProcessGenerator = Callable[..., Generator[simpy.Event, Any, None]]
@@ -100,6 +102,7 @@ class Component:
         env: Optional[SimEnvironment] = None,
         name: Optional[str] = None,
         index: Optional[int] = None,
+        num_rngs: int = 0,
     ) -> None:
         #: The simulation environment; a :class:`SimEnvironment` instance.
         self.env: SimEnvironment
@@ -118,6 +121,10 @@ class Component:
         #: Index of Component instance within group of sibling instances.
         #: Will be None for un-grouped Components.
         self.index = index
+
+        #: The number of independent random number generators used by the component.
+        self.num_rngs = num_rngs
+        self._rngs = None  # Attached during elaboration.
 
         #: String indicating the full scope of Component instance in the
         #: Component DAG.
@@ -282,7 +289,12 @@ class Component:
         """
         pass
 
-    def elaborate(self) -> None:
+
+    def get_subtree_rngs(self) -> int:
+        """Return the number of random number generators in the subtree."""
+        return sum(child.get_subtree_rngs() for child in self._children) + self.num_rngs
+
+    def elaborate(self, rngs: List[np.random.Generator]) -> None:
         """Recursively elaborate the model.
 
         The elaboration phase prepares the model for simulation. Descendant
@@ -290,6 +302,16 @@ class Component:
         elaboration-time.
 
         """
+
+        # Attach random number generators to the component.
+        assert len(rngs) == self.get_subtree_rngs()
+        self._rngs = rngs[:self.num_rngs]
+        n = self.num_rngs
+        for child in self._children:
+            child.attach_rngs(rngs[n:n + child.get_subtree_rngs()])
+            n += child.num_rngs
+
+        # Connect and elaborate children.
         self.connect_children()
         for child in self._children:
             if child._not_connected:
@@ -297,6 +319,8 @@ class Component:
                     f'{child.scope}.{child._not_connected.pop()} not connected'
                 )
             child.elaborate()
+
+        # Start processes.
         for proc, args, kwargs in self._processes:
             self.env.process(proc(*args, **kwargs))
         self.elab_hook()
