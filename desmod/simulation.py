@@ -25,7 +25,7 @@ import timeit
 import simpy
 import yaml
 from pint import UnitRegistry, Quantity, Unit
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from desmod.config import ConfigDict, ConfigFactor, factorial_config
 from desmod.progress import (
@@ -187,7 +187,7 @@ class SimEnvironment(simpy.Environment):
         :returns: A :class:`WaitUntil` event.
 
         """
-        return WaitUntil(self.env, time, value)
+        return WaitUntil(self, time, value)
 
     def schedule(
         self,
@@ -221,7 +221,8 @@ class WaitUntil(simpy.Timeout):
 
         if isinstance(time, datetime):
             self.process_at: datetime = time
-            delay = time - env.datetime()
+            delay_timedelta = time - env.datetime()
+            delay = env.time_units(delay_timedelta.total_seconds() * env.ureg.s)
         else:
             self.process_at: datetime = (env.timescale * (time - env.now))
             delay = time - env.now
@@ -235,45 +236,7 @@ class WaitUntil(simpy.Timeout):
         self._value = value
         self._delay = delay
         self._ok = True
-        env.schedule(self, simpy.events.EventPriority.NORMAL, delay)
-
-    def remaining_delay(self, unit: Optional[Union[str, Unit]] = None) -> Quantity:
-        """The remaining delay before the event is processed.
-        :param unit: The unit to convert the time to (e.g. 's', 'min', or pint.Unit('s')).
-        Default is the same unit as :attr:`timescale`.
-
-        :returns: The remaining delay before the event is processed as a :class:'Quantity'.
-        """
-        if not self.processed:
-            delay_s = (self.process_at - self.env.datetime()).total_seconds()
-        else:
-            delay_s = 0
-
-        delay = self.env.ureg.Quantity(delay_s, 's')
-
-        if unit is not None:
-            delay = delay.to(unit)
-        else:
-            delay = delay.to(self.env.timescale.units)
-
-        return delay
-
-    def elapsed(self, unit: Optional[Union[str, Unit]] = None) -> Quantity:
-        """The simulation time that has elapsed since the event was created.
-        :param unit: The unit to convert the time to (e.g. 's', 'min', or pint.Unit('s')).
-        Default is the same unit as :attr:`timescale`.
-
-        :returns: The simulation time that has elapsed since the event was created as a :class:'Quantity'.
-        """
-        elapsed_s = (self.env.datetime() - self.created_at).total_seconds()
-        elapsed = self.env.ureg.Quantity(elapsed_s, 's')
-
-        if unit is not None:
-            elapsed = elapsed.to(unit)
-        else:
-            elapsed = elapsed.to(self.env.timescale.units)
-
-        return elapsed
+        env.schedule(self, simpy.events.NORMAL, delay)
 
     def _desc(self) -> str:
         """Return a string *WaitUntil(time[, value=value])*."""

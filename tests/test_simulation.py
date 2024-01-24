@@ -54,6 +54,8 @@ def config():
         'test.fail_post_simulate': False,
         'test.fail_get_result': False,
         'test.until_delay': None,
+        'test.wait_until': None,
+
     }
 
 
@@ -70,6 +72,12 @@ class TopTest(Component):
         self.add_process(self.test_proc)
 
     def test_proc(self):
+
+        wait_until = self.env.config.get('test.wait_until')
+        if wait_until:
+            # Wait until sim time is equal to wait_until.
+            yield self.env.wait_until(wait_until)
+
         use_pint = self.env.config.setdefault('test.use_pint', True)
         timeout_delay = 0.5
         until_delay = self.env.config.get('test.until_delay')
@@ -89,6 +97,7 @@ class TopTest(Component):
     def post_sim_hook(self):
         if self.env.config.get('test.fail_post_simulate'):
             raise Exception('fail_post_simulate')
+
 
     def get_result_hook(self, result):
         if self.env.config.get('test.fail_get_result'):
@@ -513,7 +522,17 @@ def test_sim_dates(config, progress_enable):
     config['test.until_delay'] = 11260.01
     result = simulate(config, TopTest, TestEnvironment)
     assert result['sim.now'] == 11260.51
-    assert result['sim.date'] == "2020-04-14 11:00:48"
+    assert result['sim.date'] == '2020-04-14 11:00:48'
+
+    config['test.wait_until'] = datetime.strptime('2019-02-02 08:30:00', '%Y-%m-%d %H:%M:%S')
+    result = simulate(config, TopTest, TestEnvironment)
+    assert result['sim.now'] == pytest.approx(12030.51, abs=0.005)
+    assert result['sim.date'] == '2020-05-16 13:00:36'
+
+    config['test.wait_until'] = 3
+    result = simulate(config, TopTest, TestEnvironment)
+    assert result['sim.now'] == 11263.51
+    assert result['sim.date'] == '2020-04-14 14:00:48'
 
 
 def test_sim_json_result(config):
